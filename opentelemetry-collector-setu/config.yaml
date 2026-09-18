@@ -1,0 +1,81 @@
+---
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        max_recv_msg_size_mib: 16
+      http:
+        endpoint: 0.0.0.0:4318
+        max_recv_msg_size_mib: 16
+
+processors:
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 5s
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  filter/logs:
+    error_mode: ignore
+    traces: null
+    metrics: null
+    logs:
+      include:
+        match_type: regexp
+        log_record_attributes:
+          - key: "log.level"
+            value: "DEBUG"
+  resourcedetect:
+    detectors:
+      - env
+      - system
+    override: false
+
+exporters:
+  prometheusremotewrite:
+    endpoint: "http://prometheus:9090/api/v1/write"
+    resource_to_telemetry_conversion:
+      enabled: true
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+    default_labels_enabled:
+      exporter: false
+  otlp/traces:
+    endpoint: "tempo:4317"
+    tls:
+      insecure: true
+  logging:
+    loglevel: warn
+
+connectors:
+  spanmetrics:
+    dimensions:
+      - name: http.method
+      - name: http.status_code
+      - name: rpc.grpc.status_code
+    aggregation_temporality: "AGGREGATION_TEMPORALITY_CUMULATIVE"
+    namespace: span.metrics
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/traces, spanmetrics]
+      connectors: [spanmetrics]
+    metrics:
+      receivers: [otlp, spanmetrics]
+      processors: [memory_limiter, batch]
+      exporters: [prometheusremotewrite]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, filter/logs, batch]
+      exporters: [loki]
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

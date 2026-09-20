@@ -1,0 +1,80 @@
+---
+- name: Deploy Loki and Promtail for log aggregation
+  hosts: observability
+  become: true
+  vars:
+    loki_version: "2.9.4"
+    promtail_version: "2.9.4"
+    loki_port: 3100
+    promtail_port: 9080
+
+  tasks:
+    - name: Ensure required directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - /etc/loki
+        - /etc/promtail
+        - /var/lib/loki
+        - /var/lib/promtail
+
+    - name: Deploy Loki configuration
+      ansible.builtin.copy:
+        src: roles/loki/files/loki-config.yaml
+        dest: /etc/loki/loki-config.yaml
+        mode: "0644"
+      notify: Restart loki
+
+    - name: Deploy Promtail configuration
+      ansible.builtin.template:
+        src: roles/promtail/files/promtail-config.yaml.tftpl
+        dest: /etc/promtail/promtail-config.yaml
+        mode: "0644"
+      vars:
+        loki_url: "http://{{ ansible_default_ipv4.address }}:{{ loki_port }}/loki/api/v1/push"
+      notify: Restart promtail
+
+    - name: Run Loki container
+      community.docker.docker_container:
+        name: loki
+        image: "grafana/loki:{{ loki_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ loki_port }}:3100"
+        volumes:
+          - /etc/loki/loki-config.yaml:/etc/loki/local-config.yaml:ro
+          - /var/lib/loki:/loki
+        command: "-config.file=/etc/loki/local-config.yaml"
+        networks:
+          - name: observability-net
+
+    - name: Run Promtail container
+      community.docker.docker_container:
+        name: promtail
+        image: "grafana/promtail:{{ promtail_version }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ promtail_port }}:9080"
+        volumes:
+          - /etc/promtail/promtail-config.yaml:/etc/promtail/config.yaml:ro
+          - /var/log:/var/log:ro
+          - /var/lib/docker/containers:/var/lib/docker/containers:ro
+          - /var/lib/promtail:/tmp
+        command: "-config.file=/etc/promtail/config.yaml"
+        networks:
+          - name: observability-net
+
+  handlers:
+    - name: Restart loki
+      community.docker.docker_container:
+        name: loki
+        restart: true
+
+    - name: Restart promtail
+      community.docker.docker_container:
+        name: promtail
+        restart: true
